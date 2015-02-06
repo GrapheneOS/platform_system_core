@@ -334,9 +334,9 @@ int FirstStageMain(int argc, char** argv) {
     CHECKCALL(mkdir("/dev/pts", 0755));
     CHECKCALL(mkdir("/dev/socket", 0755));
     CHECKCALL(mkdir("/dev/dm-user", 0755));
-    CHECKCALL(mount("devpts", "/dev/pts", "devpts", 0, NULL));
+    CHECKCALL(mount("devpts", "/dev/pts", "devpts", MS_NOSUID|MS_NOEXEC, NULL));
 #define MAKE_STR(x) __STRING(x)
-    CHECKCALL(mount("proc", "/proc", "proc", 0, "hidepid=2,gid=" MAKE_STR(AID_READPROC)));
+    CHECKCALL(mount("proc", "/proc", "proc", MS_NOSUID|MS_NODEV|MS_NOEXEC, "hidepid=2,gid=" MAKE_STR(AID_READPROC)));
 #undef MAKE_STR
     // Don't expose the raw commandline to unprivileged processes.
     CHECKCALL(chmod("/proc/cmdline", 0440));
@@ -348,7 +348,7 @@ int FirstStageMain(int argc, char** argv) {
     android::base::ReadFileToString("/proc/bootconfig", &bootconfig);
     gid_t groups[] = {AID_READPROC};
     CHECKCALL(setgroups(arraysize(groups), groups));
-    CHECKCALL(mount("sysfs", "/sys", "sysfs", 0, NULL));
+    CHECKCALL(mount("sysfs", "/sys", "sysfs", MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL));
     CHECKCALL(mount("selinuxfs", "/sys/fs/selinux", "selinuxfs", 0, NULL));
 
     CHECKCALL(mknod("/dev/kmsg", S_IFCHR | 0600, makedev(1, 11)));
