@@ -1238,6 +1238,18 @@ on property:perf.drop_caches=3
 on property:net.tcp_def_init_rwnd=*
     write /proc/sys/net/ipv4/tcp_default_init_rwnd ${net.tcp_def_init_rwnd}
 
+on property:persist.security.deny_new_usb=disabled
+    write /proc/sys/kernel/deny_new_usb 0
+
+on property:persist.security.deny_new_usb=enabled
+    write /proc/sys/kernel/deny_new_usb 1
+
+on property:persist.security.deny_new_usb=dynamic
+    write /proc/sys/kernel/deny_new_usb 1
+
+on property:security.deny_new_usb=*
+    write /proc/sys/kernel/deny_new_usb ${security.deny_new_usb}
+
 # perf_event_open syscall security:
 # Newer kernels have the ability to control the use of the syscall via SELinux
 # hooks. init tests for this, and sets sys_init.perf_lsm_hooks to 1 if the
