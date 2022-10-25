@@ -317,6 +317,8 @@ on init
     write /proc/sys/fs/protected_fifos 2
     write /proc/sys/fs/protected_regular 2
 
+    write /proc/sys/dev/tty/ldisc_autoload 0
+
     # scheduler tunables
     # Disable auto-scaling of scheduler tunables with hotplug. The tunables
     # will vary across devices in unpredictable ways if allowed to scale with
