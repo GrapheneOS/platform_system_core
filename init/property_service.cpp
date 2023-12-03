@@ -1425,6 +1425,9 @@ static void HandleInitSocket() {
             for (const auto& property_record : persistent_properties.properties()) {
                 auto const& prop_name = property_record.name();
                 auto const& prop_value = property_record.value();
+                if (prop_name == "persist.adb.tls_server.enable") {
+                    continue;
+                }
                 InitPropertySet(prop_name, prop_value);
             }
 
