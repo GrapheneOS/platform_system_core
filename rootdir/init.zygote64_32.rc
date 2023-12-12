@@ -5,6 +5,7 @@ service zygote_secondary /system/bin/app_process32 -Xzygote /system/bin --zygote
     priority -20
     user root
     group root readproc reserved_disk
+    rlimit nofile 32768 262144
     socket zygote_secondary stream 660 root system
     socket usap_pool_secondary stream 660 root system
     onrestart restart zygote
