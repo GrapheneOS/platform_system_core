@@ -3,6 +3,7 @@ service zygote /system/bin/app_process64 -Xzygote /system/bin --zygote --start-s
     priority -20
     user root
     group root readproc reserved_disk
+    rlimit nofile 32768 262144
     socket zygote stream 660 root system
     socket usap_pool_primary stream 660 root system
     onrestart exec_background - system system -- /system/bin/vdc volume abort_fuse
