@@ -4,7 +4,7 @@ service snapuserd /system/bin/snapuserd
     disabled
     user root
     group root system
-    task_profiles OtaProfiles
+    task_profiles MaxIoPriority MaxPerformance ProcessCapacityMax
     seclabel u:r:snapuserd:s0
 
 service snapuserd_proxy /system/bin/snapuserd -socket-handoff
