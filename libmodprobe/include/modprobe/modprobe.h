@@ -31,7 +31,7 @@
 class Modprobe {
   public:
     Modprobe(const std::vector<std::string>&, const std::string load_file = "modules.load",
-             bool use_blocklist = true);
+             bool use_blocklist = true, ExternalPortState external_port_state = ENABLED);
     Modprobe(ModuleConfig config, bool use_blocklist = true);
 
     bool LoadModulesParallel(int num_threads) EXCLUDES(module_loaded_lock_);
