@@ -41,9 +41,8 @@
 
 using android::modprobe::CanonicalizeModulePath;
 
-Modprobe::Modprobe(const std::vector<std::string>& base_paths, const std::string load_file,
-                   bool use_blocklist)
-    : Modprobe(ModuleConfig::Parse(base_paths, load_file), use_blocklist) {}
+Modprobe::Modprobe(const std::vector<std::string>& base_paths, const std::string load_file,  bool use_blocklist, ExternalPortState external_port_state)
+    : Modprobe(ModuleConfig::Parse(base_paths, external_port_state, load_file), use_blocklist) {}
 
 Modprobe::Modprobe(ModuleConfig config, bool use_blocklist)
     : module_aliases_(std::move(config.module_aliases)),

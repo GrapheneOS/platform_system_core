@@ -22,11 +22,16 @@
 #include <unordered_map>
 #include <vector>
 
+enum ExternalPortState {
+    ENABLED, DISABLED,
+};
+
 // ModuleConfig contains the kernel module configurations parsed from files such as modules.dep.
 class ModuleConfig {
   public:
     // Parses the config from the files in `base_paths` directory.
     static ModuleConfig Parse(const std::vector<std::string>& base_paths,
+                              ExternalPortState external_port_state = ExternalPortState::ENABLED,
                               const std::string& load_file = "modules.load");
     ModuleConfig(ModuleConfig&&) = default;
 
