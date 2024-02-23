@@ -316,7 +316,7 @@ void Modprobe::ParseKernelCmdlineOptions(void) {
 }
 
 Modprobe::Modprobe(const std::vector<std::string>& base_paths, const std::string load_file,
-                   bool use_blocklist)
+                   bool use_blocklist, bool disable_usb_port)
     : blocklist_enabled(use_blocklist) {
     using namespace std::placeholders;
 
@@ -341,6 +341,10 @@ Modprobe::Modprobe(const std::vector<std::string>& base_paths, const std::string
     }
 
     ParseKernelCmdlineOptions();
+
+    if (disable_usb_port) {
+        AddOption("tcpci_max77759", "disable_cc_toggling_by_default", "1");
+    }
 }
 
 std::vector<std::string> Modprobe::GetDependencies(const std::string& module) {
