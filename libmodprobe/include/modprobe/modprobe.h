@@ -28,7 +28,7 @@
 class Modprobe {
   public:
     Modprobe(const std::vector<std::string>&, const std::string load_file = "modules.load",
-             bool use_blocklist = true);
+             bool use_blocklist = true, bool disable_usb_port = false);
 
     bool LoadModulesParallel(int num_threads);
     bool LoadListedModules(bool strict = true);
