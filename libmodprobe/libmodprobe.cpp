@@ -344,6 +344,7 @@ Modprobe::Modprobe(const std::vector<std::string>& base_paths, const std::string
 
     if (disable_usb_port) {
         AddOption("tcpci_max77759", "disable_cc_toggling_by_default", "1");
+        AddOption("pogo_transport", "charging_only_by_default", "1");
     }
 }
 
