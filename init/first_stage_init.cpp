@@ -277,6 +277,13 @@ bool LoadKernelModules(BootMode boot_mode, bool want_console, bool want_parallel
         }
     }
 
+    if (disable_usb_port) {
+        if (auto res = WriteFile("/proc/sys/kernel/deny_new_usb2", "1"); res.ok()) {
+            LOG(INFO) << "wrote 1 to deny_new_usb2";
+        } else {
+            LOG(ERROR) << "write to deny_new_usb2 failed";
+        }
+    }
     Modprobe m({MODULE_BASE_DIR}, GetModuleLoadList(boot_mode, MODULE_BASE_DIR), true, disable_usb_port);
     bool retval = (want_parallel) ? m.LoadModulesParallel(std::thread::hardware_concurrency())
                                   : m.LoadListedModules(!want_console);
