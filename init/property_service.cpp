@@ -657,9 +657,11 @@ std::optional<uint32_t> HandlePropertySet(const std::string& name, const std::st
         return {PROP_SUCCESS};
     }
 
-    if (name == "sys.auto_reboot_ctl") {
-        int res = auto_reboot_handle_property_set(value);
-        return {res};
+    if (!IsMicrodroid()) {
+        if (name == "sys.auto_reboot_ctl") {
+            int res = auto_reboot_handle_property_set(value);
+            return {res};
+        }
     }
 
     return PropertySet(name, value, socket, error);
@@ -1543,7 +1545,9 @@ static void PropertyServiceThread(int fd, bool listen_init) {
         }
     }
 
-    auto_reboot_timer_init();
+    if (!IsMicrodroid()) {
+        auto_reboot_timer_init();
+    }
 
     while (true) {
         auto epoll_result = epoll.Wait(std::nullopt);
