@@ -206,6 +206,9 @@ static void Status(const std::string& message) {
     if (!message.empty()) {
         static constexpr char kStatusFormat[] = "%-50s ";
         fprintf(stderr, kStatusFormat, message.c_str());
+        if (has_flash_capturer()) {
+            fprintf(stderr, "\n");
+        }
     }
     last_start_time = now();
 }
@@ -566,6 +569,8 @@ static int show_help() {
             "                            Check whether unlocking is allowed (1) or not(0).\n"
             "\n"
             "advanced:\n"
+            " optimize-factory-image FACTORY_ZIP OUTPUT_ZIP_OUTER_DIR_NAME [OUTPUT_ZIP]\n"
+            "                            OUTPUT_ZIP defaults to OUTPUT_ZIP_OUTER_DIR_NAME.zip\n"
             " erase PARTITION            Erase a flash partition.\n"
             " format[:FS_TYPE[:SIZE]] PARTITION\n"
             "                            Format a flash partition.\n"
@@ -1022,6 +1027,9 @@ static uint64_t get_uint_var(const char* var_name, fastboot::IFastBootDriver* fb
 int64_t get_sparse_limit(int64_t size, const FlashingPlan* fp) {
     int64_t limit = int64_t(fp->sparse_limit);
     if (limit == 0) {
+        if (has_flash_capturer()) {
+            die("sparse limit is not set");
+        }
         // Unlimited, so see what the target device's limit is.
         // TODO: shouldn't we apply this limit even if you've used -S?
         if (target_sparse_limit == -1) {
@@ -1259,7 +1267,8 @@ void flash_partition_files(const std::string& partition, const std::vector<Spars
 
 static void flash_buf(const ImageSource* source, const std::string& partition,
                       struct fastboot_buffer* buf, const bool apply_vbmeta) {
-    copy_avb_footer(source, partition, buf);
+    // irrelevant in FlashAll task that FlashCapturer uses
+    if (!has_flash_capturer()) copy_avb_footer(source, partition, buf);
 
     // Rewrite vbmeta if that's what we're flashing and modification has been requested.
     if (g_disable_verity || g_disable_verification) {
@@ -1511,6 +1520,9 @@ void do_flash(const char* pname, const char* fname, const bool apply_vbmeta,
         std::string file_string(fname);
         if (fp->source->ReadFile(file_string.substr(0, file_string.find('.')) + ".sig",
                                  &signature_data)) {
+            if (has_flash_capturer()) {
+                die("unexpected signature %s", fname);
+            }
             fb->Download("signature", signature_data);
             fb->RawCommand("signature", "installing signature");
         }
@@ -1519,9 +1531,13 @@ void do_flash(const char* pname, const char* fname, const bool apply_vbmeta,
     }
 
     if (is_logical(pname)) {
+        if (has_flash_capturer()) {
+            die("unexpected logical partition %s in do_flash()", pname);
+        }
         fb->ResizePartition(pname, std::to_string(buf.image_size));
     }
-    std::string flash_pname = repack_ramdisk(pname, &buf, fp->fb);
+    // irrelevant in FlashAll task that FlashCapturer uses
+    std::string flash_pname = has_flash_capturer() ? pname : repack_ramdisk(pname, &buf, fp->fb);
     flash_buf(fp->source.get(), flash_pname, &buf, apply_vbmeta);
 }
 
@@ -1564,6 +1580,12 @@ void reboot_to_userspace_fastboot() {
 }
 
 static void CancelSnapshotIfNeeded() {
+    if (auto fc = flash_capturer()) {
+        fc->AddCommand("maybe-cancel-snapshot-update");
+        fc->AddShBatCommand("fastboot snapshot-update cancel");
+        return;
+    }
+
     std::string merge_status = "none";
     if (fb->GetVar(FB_VAR_SNAPSHOT_UPDATE_STATUS, &merge_status) == fastboot::SUCCESS &&
         !merge_status.empty() && merge_status != "none") {
@@ -1773,19 +1795,20 @@ std::vector<std::unique_ptr<Task>> ParseFastbootInfo(const FlashingPlan* fp,
 FlashAllTool::FlashAllTool(FlashingPlan* fp) : fp_(fp) {}
 
 void FlashAllTool::Flash() {
-    DumpInfo();
+    if (!has_flash_capturer()) DumpInfo();
     CheckRequirements();
 
-    // Change the slot first, so we boot into the correct recovery image when
-    // using fastbootd.
-    if (fp_->slot_override == "all") {
-        set_active("a");
-    } else {
-        set_active(fp_->slot_override);
+    if (!has_flash_capturer()) {
+        // Change the slot first, so we boot into the correct recovery image when
+        // using fastbootd.
+        if (fp_->slot_override == "all") {
+            set_active("a");
+        } else {
+            set_active(fp_->slot_override);
+        }
+
+        DetermineSlot();
     }
-
-    DetermineSlot();
-
     CancelSnapshotIfNeeded();
 
     tasks_ = CollectTasks();
@@ -1825,7 +1848,65 @@ void FlashAllTool::CheckRequirements() {
     if (!fp_->source->ReadFile("android-info.txt", &contents)) {
         die("could not read android-info.txt");
     }
-    ::CheckRequirements({contents.data(), contents.size()}, fp_->force_flash);
+    if (auto fc = flash_capturer()) {
+        fc->AddFile("android-info.txt", contents.data(), contents.size());
+        fc->AddCommand("check-requirements android-info.txt");
+
+        // android-info.txt is checked by fastboot only if it's part of an update package, there's no exported fastboot
+        // command for checking it separately. The following sequence generates an empty update package with the
+        // provided android-info.txt
+
+        // aiz stands for android-info.zip
+        int aiz_fd = make_temporary_fd("android-info-zip"); // dies on failure
+        FILE* aiz_file = fdopen(aiz_fd, "wb");
+        if (aiz_file == nullptr) {
+            die("fdopen(android_zip_fd): %s", strerror(errno));
+        }
+        ZipWriter aiz(aiz_file);
+        if (int ret = aiz.StartEntry("fastboot-info.txt", ZipWriter::kCompress)) {
+            die("android_info_zip.StartEntry(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        const char* fastboot_info = "version 1\n";
+        if (int ret = aiz.WriteBytes(fastboot_info, strlen(fastboot_info))) {
+            die("android_info_zip.WriteBytes(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.FinishEntry()) {
+            die("android_info_zip.FinishEntry(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.StartEntry("android-info.txt", ZipWriter::kCompress)) {
+            die("android_info_zip.StartEntry(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.WriteBytes(contents.data(), contents.size())) {
+            die("android_info_zip.WriteBytes(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.FinishEntry()) {
+            die("android_info_zip.FinishEntry(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.Finish()) {
+            die("android_info_zip.Finish(): %s", ErrorCodeString(ret));
+        }
+        int64_t aiz_fd_len = lseek64(aiz_fd, 0L, SEEK_END);
+        if (aiz_fd_len < 0) {
+            die("lseek64(android_info_zip_fd, SEEK_END): %s", strerror(errno));
+        }
+
+        std::vector<uint8_t> android_info_zip_contents(aiz_fd_len);
+        if (!android::base::ReadFullyAtOffset(aiz_fd, android_info_zip_contents.data(), aiz_fd_len, 0)) {
+            die("ReadFully(android_info_zip_fd): %s", strerror(errno));
+        }
+
+        if (fclose(aiz_file) != 0) {
+            die("fclose(android_info_zip_file): %s", strerror(errno));
+        }
+
+        std::string aiz_name = "android-info.zip";
+        fc->AddFile(aiz_name, android_info_zip_contents.data(), android_info_zip_contents.size());
+
+        fc->AddShBatComment("this command only checks android-info.txt requirements, it does not perform an update");
+        fc->AddShBatCommand("fastboot --disable-super-optimization --skip-reboot update " + aiz_name);
+    } else {
+        ::CheckRequirements({contents.data(), contents.size()}, fp_->force_flash);
+    }
 }
 
 void FlashAllTool::DetermineSlot() {
@@ -2200,6 +2281,16 @@ static void FastbootAborter(const char* message) {
     die("%s", message);
 }
 
+static FlashCapturer* g_flash_capturer;
+
+FlashCapturer* flash_capturer() {
+    return g_flash_capturer;
+}
+
+bool has_flash_capturer() {
+    return flash_capturer() != nullptr;
+}
+
 int FastBootTool::Main(int argc, char* argv[]) {
     android::base::InitLogging(argv, FastbootLogger, FastbootAborter);
     std::unique_ptr<FlashingPlan> fp = std::make_unique<FlashingPlan>();
@@ -2344,6 +2435,15 @@ int FastBootTool::Main(int argc, char* argv[]) {
 
     if (argc == 0 && !fp->wants_wipe && !fp->wants_set_active) syntax_error("no command");
 
+    if (argc > 0 && !strcmp(*argv, "optimize-factory-image")) {
+        g_flash_capturer = new FlashCapturer();
+
+        if (fp->sparse_limit == 0) {
+            die("sparse limit is not set, use the -S option to set it. Its value should be the same "
+                "as the value of max-download-size fastboot variable.");
+        }
+    }
+
     if (argc > 0 && !strcmp(*argv, "devices")) {
         list_devices();
         return 0;
@@ -2365,9 +2465,12 @@ int FastBootTool::Main(int argc, char* argv[]) {
         return show_help();
     }
 
-    std::unique_ptr<Transport> transport = open_device();
-    if (!transport) {
-        return 1;
+    std::unique_ptr<Transport> transport = nullptr;
+    if (!has_flash_capturer()) {
+        transport = open_device();
+        if (!transport) {
+            return 1;
+        }
     }
     fastboot::DriverCallbacks driver_callbacks = {
             .prolog = Status,
@@ -2404,6 +2507,25 @@ int FastBootTool::Main(int argc, char* argv[]) {
     std::vector<std::string> args(argv, argv + argc);
     while (!args.empty()) {
         std::string command = next_arg(&args);
+
+        if (auto fc = flash_capturer()) {
+            std::string factory_path = next_arg(&args);
+            if (!factory_path.ends_with(".zip")) {
+                die("factory path doesn't end with .zip: %s", factory_path.c_str());
+            }
+            std::string output_zip_outer_dir_name = next_arg(&args);
+            if (output_zip_outer_dir_name.find('/') != std::string::npos) {
+                die("invalid outer dir name");
+            }
+            fc->SetOutputZipOuterDirName(output_zip_outer_dir_name);
+            std::string output_zip_path = args.empty() ?
+                                          output_zip_outer_dir_name + ".zip" :
+                                          next_arg(&args);
+
+            fc->Run(fp.get(), factory_path, output_zip_path);
+            fprintf(stderr, "Finished. Total time: %.3fs\n", (now() - start));
+            return 0;
+        }
 
         if (command == FB_CMD_GETVAR) {
             std::string variable = next_arg(&args);
@@ -2662,4 +2784,495 @@ unsigned FastBootTool::ParseFsOption(const char* arg) {
             syntax_error("unsupported options: %s", options[i].c_str());
     }
     return fsOptions;
+}
+
+static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, std::string& contents) {
+    std::vector<std::string> lines = android::base::Split(contents, "\n");
+
+    int bootloader_flash_counter = 0;
+    bool added_set_active_a = false;
+
+    for (std::string& line : lines) {
+        if (!line.starts_with("fastboot ")) {
+            continue;
+        }
+
+        if (line.find(" update image-") != std::string::npos) {
+            // "fastboot update" is handled separately
+            break;
+        }
+
+        std::vector<std::string> tokens = android::base::Tokenize(line, " ");
+
+        if (tokens.size() < 2 || tokens[0] != "fastboot") {
+            die("invalid flash-all line %s", line.c_str());
+        }
+
+        size_t token_count = 0;
+
+        if (tokens[1] == "flash") {
+            bool other_slot = false;
+            size_t partition_idx = 2;
+            size_t file_idx = 3;
+            token_count = 4;
+            if (tokens[2] == "--slot=other") {
+                other_slot = true;
+                ++partition_idx;
+                ++file_idx;
+                ++token_count;
+            }
+            // at() is used intentionally for bounds checking
+            std::string& partition = tokens.at(partition_idx);
+            std::string& file = tokens.at(file_idx);
+
+            if (partition == "bootloader") {
+                if (!other_slot) {
+                    die("unexpected bootloader flash command");
+                }
+                ++bootloader_flash_counter;
+            }
+
+            fc.AddCommand(("flash " + partition).append(" ").append(file)
+                                  .append(other_slot ? " other-slot" : ""));
+            fc.AddShBatCommand(line);
+        } else if (tokens[1] == "--set-active=other") {
+            token_count = 2;
+            fc.AddCommand("toggle-active-slot");
+            fc.AddShBatCommand(line);
+        } else if (tokens[1] == "reboot-bootloader") {
+            token_count = 2;
+            fc.AddCommand(tokens[1]);
+            fc.AddShBatCommand(line);
+            fc.AddShLine("sleep 5");
+            fc.AddBatLine("ping -n 5 127.0.0.1 >nul");
+            if (bootloader_flash_counter == 2 && !added_set_active_a) {
+                fc.AddComment("size of partition splits depends on this value");
+                std::stringstream max_dl_size_hex;
+                max_dl_size_hex << "0x" << std::hex << flashing_plan->sparse_limit;
+                fc.AddCheckVarCommand("max-download-size", max_dl_size_hex.str());
+
+                fc.AddComment("layout of the super partition depends on the current slot, which is hardcoded to slot A");
+                fc.AddCommand("run-cmd set_active:a");
+                fc.AddShBatCommand("fastboot --set-active=a");
+                added_set_active_a = true;
+
+                fc.AddCheckVarCommand("current-slot", "a");
+            }
+        } else if (tokens[1] == "erase") {
+            token_count = 3;
+            std::string& partition = tokens.at(2);
+            fc.AddCommand("erase " + partition);
+            fc.AddShBatCommand("fastboot erase " + partition);
+        } else if (tokens[1] == "snapshot-update") {
+            token_count = 3;
+            if (tokens.at(2) != "cancel") {
+                die("unexpected flash-all command: %s", line.c_str());
+            }
+            fc.AddCommand("maybe-cancel-snapshot-update");
+            fc.AddShBatCommand(line);
+        } else if (tokens[1] == "oem") {
+            auto cmd = std::string("run-cmd");
+            for (size_t i = 1; i < tokens.size(); ++i) {
+                cmd.append(" ").append(tokens[i]);
+            }
+            fc.AddCommand(cmd);
+            token_count = tokens.size();
+            fc.AddShBatCommand(line);
+        }
+        else {
+            die("unknown flash-all command %s", line.c_str());
+        }
+
+        if (tokens.size() != token_count) {
+            die("unexpected number of tokens: %s", line.c_str());
+        }
+    }
+
+    if (bootloader_flash_counter != 2) {
+        die("unexpected number of flash bootloader commands: %i", bootloader_flash_counter);
+    }
+}
+
+static void extract_or_die(ZipArchiveHandle zip, ZipEntry64 &entry, std::string& entry_name, uint8_t* dst, size_t len) {
+    if (int ret = ExtractToMemory(zip, &entry, dst, len)) {
+        die("unable to extract %s: %s", entry_name.c_str(), ErrorCodeString(ret));
+    }
+}
+
+void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, std::string& out_path) {
+    flashing_plan->wants_wipe = true; // needed for capture of wipe commands
+
+    ZipArchiveHandle factory_zip;
+    if (int ret = OpenArchive(factory_path.c_str(), &factory_zip)) {
+        die("unable to open factory zip: %s", ErrorCodeString(ret));
+    }
+
+    std::string tmp_out_path = out_path + ".tmp";
+    output_zip_writer_file_ = fopen(tmp_out_path.c_str(), "wb");
+    if (output_zip_writer_file_ == nullptr) {
+        die("unable to create out file %s: %s", out_path.c_str(), strerror(errno));
+    }
+
+    output_zip_writer_ = new ZipWriter(output_zip_writer_file_);
+
+    void* zip_iter_cookie;
+
+    if (int ret = StartIteration(factory_zip, &zip_iter_cookie)) {
+        die("factory zip StartIteration failed: %s", ErrorCodeString(ret));
+    }
+
+    ZipArchiveHandle update_zip = nullptr;
+
+    static_assert(sizeof(uint8_t) == sizeof(char), "unexpected char size");
+    std::string flash_all_sh;
+    std::string flash_all_bat;
+    std::string product_name;
+
+    for (;;) {
+        ZipEntry64 entry;
+        std::string entry_name;
+        int ret = Next(zip_iter_cookie, &entry, &entry_name);
+        if (ret == -1) {
+            EndIteration(zip_iter_cookie);
+            zip_iter_cookie = nullptr;
+            break;
+        }
+        if (ret) {
+            die("factory zip iteration failed: %s", ErrorCodeString(ret));
+        }
+
+        std::string entry_base_name = entry_name.substr(entry_name.find_last_of('/') + 1);
+
+        if (entry_base_name.empty()) {
+            // entry is a directory
+            continue;
+        }
+
+        if (entry_base_name.starts_with("image-") && entry_base_name.ends_with(".zip")) {
+            size_t product_name_start = strlen("image-");
+            size_t product_name_end = entry_base_name.find("-", product_name_start);
+            if (product_name_end == std::string::npos) {
+                die("product_name_end not found");
+            }
+            product_name = entry_base_name.substr(product_name_start, product_name_end - product_name_start);
+
+            if (update_zip != nullptr) {
+                die("more than one update zip");
+            }
+            if (entry.method != kCompressStored) {
+                die("update zip is compressed");
+            }
+            int factory_fd = dup(GetFileDescriptor(factory_zip));
+            if (factory_fd < 0) {
+                die("unable to dup factory fd: %s", strerror(errno));
+            }
+            if (int ret = OpenArchiveFdRange(factory_fd, entry_base_name.c_str(), &update_zip,
+                                             entry.uncompressed_length, entry.offset)) {
+                die("unable to open update zip: %s", ErrorCodeString(ret));
+            }
+            // factory_fd is now owned by update_zip
+
+            continue;
+        }
+
+        const size_t entry_len = entry.uncompressed_length;
+
+        if (entry_name.ends_with(".sh")) {
+            if (entry_base_name == "flash-all.sh") {
+                flash_all_sh.resize(entry_len);
+                // sizeof(char) is asserted above
+                extract_or_die(factory_zip, entry, entry_name, reinterpret_cast<uint8_t*>(flash_all_sh.data()), entry_len);
+            } else if (entry_base_name != "flash-base.sh") {
+                die("unknown sh script: %s", entry_name.c_str());
+            }
+        } else if (entry_name.ends_with(".bat")) {
+            if (entry_base_name != "flash-all.bat") {
+                die("unknown bat script: %s", entry_name.c_str());
+            }
+            flash_all_bat.resize(entry_len);
+            extract_or_die(factory_zip, entry, entry_name, reinterpret_cast<uint8_t*>(flash_all_bat.data()), entry_len);
+        } else {
+            std::vector<uint8_t> contents(entry_len);
+            extract_or_die(factory_zip, entry, entry_name, contents.data(), entry_len);
+            AddFile(entry_base_name, contents.data(), entry_len);
+        }
+    }
+
+    CloseArchive(factory_zip);
+
+    if (update_zip == nullptr) {
+        die("no update zip");
+    }
+    if (flash_all_sh.empty()) {
+        die("no flash-all.sh");
+    }
+    if (flash_all_bat.empty()) {
+        die("no flash-all.bat");
+    }
+
+    size_t flash_all_sh_prolog_end = flash_all_sh.find("\n# PROLOG_END");
+    if (flash_all_sh_prolog_end == std::string::npos) {
+        die("no flash_all_sh_prolog_end");
+    }
+    AddShLine(flash_all_sh.substr(0, flash_all_sh_prolog_end));
+
+    size_t flash_all_bat_prolog_end = flash_all_bat.find("\n:: PROLOG_END");
+    if (flash_all_bat_prolog_end == std::string::npos) {
+        die("no flash_all_bat_prolog_end");
+    }
+    AddBatLine(flash_all_bat.substr(0, flash_all_bat_prolog_end));
+
+    AddShBatLine("echo Available devices:");
+    AddShBatCommand("fastboot devices -l");
+
+    if (product_name.empty()) {
+        die("product_name not set");
+    }
+    AddCheckVarCommand("product", product_name);
+    AddCheckVarCommand("slot-count", "2"); // assumed in many places
+
+    parse_flash_all_sh(*this, flashing_plan, flash_all_sh);
+    verbose("flash-all.sh converted to:\n%s", script_.c_str());
+
+    flashing_plan->source.reset(new ZipImageSource(update_zip));
+    FlashAllTool tool(flashing_plan);
+    // FlashAll output is collected to the output zip
+    tool.Flash();
+
+    CloseArchive(update_zip);
+
+    AddFile("script.txt", script_.data(), script_.length());
+
+    std::cerr << "FlashCapturer: script.txt:\n-------------------------\n"
+              << script_ << "-------------------------\n";
+
+    AddFile("flash-all.sh", sh_script_.data(), sh_script_.length());
+    verbose("FlashCapturer: flash-all.sh:\n-------------------------\n"
+            "%s-------------------------\n", sh_script_.c_str());
+
+    AddBatLine(":pakExit\n"
+               "echo Press any key to exit...\n"
+               "pause >nul\n"
+               "exit");
+
+    AddFile("flash-all.bat", bat_script_.data(), bat_script_.length());
+    verbose("FlashCapturer: flash-all.bat:\n-------------------------\n"
+              "%s-------------------------\n", bat_script_.c_str());
+
+    if (int32_t ret = output_zip_writer_->Finish()) {
+        die("output_zip_writer->Finish, %s", ErrorCodeString(ret));
+    }
+
+    delete output_zip_writer_;
+    output_zip_writer_ = nullptr;
+#ifndef _WIN32
+    // fflush() is called by output_zip_writer_->Finish() above
+    if (fsync(fileno(output_zip_writer_file_))) {
+        die("fsync(output_zip_writer_file) failed: %s", strerror(errno));
+    }
+#endif
+    if (fclose(output_zip_writer_file_)) {
+        die("fclose(output_zip_writer_file) failed: %s", strerror(errno));
+    }
+    output_zip_writer_file_ = nullptr;
+
+    // atomically update the output file
+    if (rename(tmp_out_path.c_str(), out_path.c_str())) {
+        die("rename(tmp_out_path, out_path) failed: %s", strerror(errno));
+    }
+
+    std::cerr << "path of optimized factory image: " << out_path << '\n';
+}
+
+void FlashCapturer::SetPendingPartitionName(const std::string& part_name) {
+    if (pending_file_name_ != nullptr) {
+        die("pending_partition_name_ is already set");
+    }
+
+    if (!part_name.ends_with("_a")) {
+        die("unexpected partition name");
+    }
+
+    std::string base_partition_name = part_name.substr(0, part_name.length() - 2);
+
+    pending_file_name_ = new std::string(base_partition_name + ".img");
+    std::string cmd = ("flash " + base_partition_name).append(" ").append(*pending_file_name_);
+    AddCommand(cmd);
+    AddShBatCommand("fastboot " + cmd);
+}
+
+void FlashCapturer::AddPartition(const void* data, size_t len, size_t flags) {
+    if (pending_file_name_ == nullptr) {
+        die("AddPartition: no pending partition name");
+    }
+
+    AddFile(*pending_file_name_, data, len, flags);
+
+    delete pending_file_name_;
+    pending_file_name_ = nullptr;
+}
+
+static std::string size_to_string(size_t v) {
+    if (v >= (10 * (1 << 20))) {
+        return std::to_string(v >> 20).append(" MiB");
+    }
+    if (v >= (10 * (1 << 10))) {
+        return std::to_string(v >> 10).append(" KiB");
+    }
+    return std::to_string(v).append(" B");
+}
+
+void FlashCapturer::AddFile(const std::string& name, const void* data, size_t len, size_t flags) {
+    StartOutputZipEntry(name, flags);
+    if (int ret = output_zip_writer_->WriteBytes(data, len)) {
+        die("AddFile: WriteBytes: %s", ErrorCodeString(ret));
+    }
+    FinishOutputZipEntry();
+    ZipWriter::FileEntry entry;
+    if (int ret = output_zip_writer_->GetLastEntry(&entry)) {
+        die("AddSparseFileInner: GetLastEntry: %s", ErrorCodeString(ret));
+    }
+    std::cerr << "FlashCapturer: added " << name << ", "
+              << size_to_string(entry.uncompressed_size)
+              << " (" << size_to_string(entry.compressed_size) << ")\n";
+}
+
+void FlashCapturer::AddSparseFileInner(struct sparse_file *s, const std::string &name, size_t flags) {
+    StartOutputZipEntry(name, flags);
+    auto cb = [](void* priv, const void* buf, size_t len) -> int {
+        auto w = static_cast<ZipWriter*>(priv);
+        if (int ret = w->WriteBytes(buf, len)) {
+            die("AddSparseFileInner: WriteBytes: %s", ErrorCodeString(ret));
+        }
+        return 0;
+    };
+    if (int ret = sparse_file_callback(s, true, false, cb, output_zip_writer_)) {
+        die("AddSparseFileInner: sparse_file_callback: %s", strerror(-ret));
+    }
+    FinishOutputZipEntry();
+    ZipWriter::FileEntry entry;
+    if (int ret = output_zip_writer_->GetLastEntry(&entry)) {
+        die("AddSparseFileInner: GetLastEntry: %s", ErrorCodeString(ret));
+    }
+    std::cerr << "FlashCapturer: added sparse " << name << ", "
+              << size_to_string(entry.uncompressed_size)
+              << " (" << size_to_string(entry.compressed_size) << ")\n";
+}
+
+void FlashCapturer::AddSparsePartition(struct sparse_file *s, size_t flags) {
+    if (pending_file_name_ == nullptr) {
+        die("AddSparseFile: no pending partition name");
+    }
+    AddSparseFileInner(s, *pending_file_name_, flags);
+    delete pending_file_name_;
+    pending_file_name_ = nullptr;
+}
+
+void FlashCapturer::AddSplitSparsePartition(const std::string& name, std::vector<SparsePtr>& files, size_t flags) {
+    std::cerr << "FlashCapturer: AddSplitSparsePartition " << name << ", "
+              << files.size() << " splits" << '\n';
+    for (size_t i = 0; i < files.size(); i++) {
+        std::string file_name = (name + "_").append(std::to_string(i + 1)).append(".img");
+        AddSparseFileInner(files[i].get(), file_name, flags);
+        std::string cmd = ("flash " + name).append(" ").append(file_name);
+        AddCommand(cmd);
+        AddShBatLine(("echo Flashing " + name).append(", ")
+            .append(std::to_string(i + 1)).append("/").append(std::to_string(files.size())));
+        AddShBatCommand("fastboot " + cmd);
+    }
+}
+
+void FlashCapturer::SetOutputZipOuterDirName(const std::string& name) {
+    if (!output_zip_outer_dir_name_.empty()) {
+        die("output_zip_outer_dir_name is already set");
+    }
+    output_zip_outer_dir_name_ = name;
+}
+
+void FlashCapturer::StartOutputZipEntry(const std::string& name, size_t flags) {
+    std::string path = output_zip_outer_dir_name_ + "/" + name;
+    if (int ret = output_zip_writer_->StartEntry(path, flags)) {
+        die("StartOutputZipEntry(%s): %s", path.c_str(), ErrorCodeString(ret));
+    }
+}
+
+void FlashCapturer::FinishOutputZipEntry() {
+    if (int ret = output_zip_writer_->FinishEntry()) {
+        die("FinishOutputZipEntry: %s", ErrorCodeString(ret));
+    }
+}
+
+void FlashCapturer::AddComment(const std::string& comment) {
+    script_.append("# ").append(comment).push_back('\n');
+    AddShBatComment(comment);
+}
+
+void FlashCapturer::AddCommand(const std::string& cmd) {
+    script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddShLine(const std::string &cmd) {
+    sh_script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddBatLine(const std::string &cmd) {
+    bat_script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddShBatLine(const std::string &cmd) {
+    AddShLine(cmd);
+    AddBatLine(cmd);
+}
+
+void FlashCapturer::AddShBatCommand(const std::string &cmd) {
+    AddShLine(cmd);
+    AddBatLine(cmd);
+    AddBatLine("if %errorlevel% neq 0 call:pakExit\n");
+}
+
+void FlashCapturer::AddShComment(const std::string &comment) {
+    sh_script_.append("# ").append(comment).push_back('\n');
+}
+
+void FlashCapturer::AddBatComment(const std::string &comment) {
+    bat_script_.append(":: ").append(comment).push_back('\n');
+}
+
+void FlashCapturer::AddShBatComment(const std::string &comment) {
+    AddShComment(comment);
+    AddBatComment(comment);
+}
+
+void FlashCapturer::AddCheckVarCommand(const std::string& name, const std::string& expected_value) {
+    AddCommand("check-var " + name + " " + expected_value);
+
+    std::string sh_name(name);
+    sh_name.erase(std::remove(sh_name.begin(), sh_name.end(), '_'), sh_name.end());
+    sh_name.erase(std::remove(sh_name.begin(), sh_name.end(), '-'), sh_name.end());
+
+    AddShLine(sh_name + "=$(fastboot getvar " + name + " 2>&1 | grep \"" + name + ":\" | cut -d ' ' -f 2)\n"
+              "if ! [ $" + sh_name + " = \"" + expected_value + "\" ]; then");
+    if (name == "product") {
+        AddShLine("  echo Error: this factory image is for " + expected_value
+                  + ", but the name of connected device is $" + sh_name);
+    } else {
+        AddShLine("  echo Error: unexpected value of " + name + " variable: expected " + expected_value
+                  + ", got $" + sh_name);
+    }
+    AddShLine("  exit 1\n"
+              "fi");
+
+    AddBatLine("for /f \"tokens=2\" %%a in ('fastboot getvar " + name + " 2^>^&1 ^| find \"" + name + ":\"') do (\n"
+               "  set \"" + sh_name + "=%%a\"\n"
+               ")\n"
+               "if not \"%" + sh_name + "%\" == \"" + expected_value + "\" (");
+    if (name == "product") {
+        AddBatLine("  echo Error: this factory image is for " + expected_value
+                   + ", but the name of connected device is %" + sh_name + "%");
+    } else {
+        AddBatLine("  echo Error: unexpected value of " + name + " variable: expected " + expected_value
+                   + ", got %" + sh_name + "%");
+    }
+    AddBatLine("  call:pakExit\n"
+               ")");
 }
