@@ -50,6 +50,7 @@
 #include <storage_literals/storage_literals.h>
 
 #include "constants.h"
+#include "fastboot.h"
 #include "transport.h"
 
 using android::base::StringPrintf;
@@ -95,11 +96,24 @@ RetCode FastBootDriver::Erase(const std::string& partition, std::string* respons
 
 RetCode FastBootDriver::Flash(const std::string& partition, std::string* response,
                               std::vector<std::string>* info) {
+    if (has_flash_capturer()) {
+        return SUCCESS;
+    }
+
     return RawCommand(FB_CMD_FLASH ":" + partition, "Writing '" + partition + "'", response, info);
 }
 
 RetCode FastBootDriver::GetVar(const std::string& key, std::string* val,
                                std::vector<std::string>* info) {
+    if (auto fc = flash_capturer()) {
+        if (auto maybe_val = fc->vars_.find(key); maybe_val != fc->vars_.end()) {
+            *val = maybe_val->second;
+            return fastboot::SUCCESS;
+        }
+
+        die("unexpected GetVar: %s", key.c_str());
+    }
+
     return RawCommand(FB_CMD_GETVAR ":" + key, val, info);
 }
 
@@ -149,6 +163,11 @@ RetCode FastBootDriver::FlashPartition(const std::string& partition,
 RetCode FastBootDriver::FlashPartition(const std::string& partition, android::base::borrowed_fd fd,
                                        uint32_t size) {
     RetCode ret;
+
+    if (auto fc = flash_capturer()) {
+        fc->SetPendingPartitionName(partition);
+    }
+
     if ((ret = Download(partition, fd, size))) {
         return ret;
     }
@@ -158,6 +177,11 @@ RetCode FastBootDriver::FlashPartition(const std::string& partition, android::ba
 RetCode FastBootDriver::FlashPartition(const std::string& partition, sparse_file* s, uint32_t size,
                                        size_t current, size_t total) {
     RetCode ret;
+
+    if (auto fc = flash_capturer()) {
+        fc->SetPendingPartitionName(partition);
+    }
+
     if ((ret = Download(partition, s, size, current, total, false))) {
         return ret;
     }
@@ -264,6 +288,11 @@ RetCode FastBootDriver::Download(sparse_file* s, bool use_crc, std::string* resp
     if (size <= 0 || size > MAX_DOWNLOAD_SIZE) {
         error_ = "Sparse file is too large or invalid";
         return BAD_ARG;
+    }
+
+    if (auto fc = flash_capturer()) {
+        fc->AddSparsePartition(s);
+        return SUCCESS;
     }
 
     RetCode ret;
@@ -453,6 +482,10 @@ RetCode FastBootDriver::RawCommand(const std::string& cmd, std::string* response
 
 RetCode FastBootDriver::DownloadCommand(uint32_t size, std::string* response,
                                         std::vector<std::string>* info) {
+    if (has_flash_capturer()) {
+        return SUCCESS;
+    }
+
     std::string cmd(android::base::StringPrintf("%s:%08" PRIx32, FB_CMD_DOWNLOAD, size));
     RetCode ret;
     if ((ret = RawCommand(cmd, response, info))) {
@@ -463,6 +496,10 @@ RetCode FastBootDriver::DownloadCommand(uint32_t size, std::string* response,
 
 RetCode FastBootDriver::HandleResponse(std::string* response, std::vector<std::string>* info,
                                        int* dsize) {
+    if (has_flash_capturer()) {
+        return SUCCESS;
+    }
+
     char status[FB_RESPONSE_SZ + 1];
     auto start = std::chrono::steady_clock::now();
 
@@ -566,7 +603,13 @@ RetCode FastBootDriver::SendBuffer(const void* buf, size_t size) {
         return BAD_ARG;
     }
     // Write the buffer
-    ssize_t tmp = transport_->Write(buf, size);
+    ssize_t tmp;
+    if (auto fc = flash_capturer()) {
+        fc->AddPartition(buf, size);
+        tmp = static_cast<size_t>(size);
+    } else {
+        tmp = transport_->Write(buf, size);
+    }
 
     if (tmp < 0) {
         error_ = ErrnoStr("Write to device failed in SendBuffer()");
