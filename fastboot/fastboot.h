@@ -28,6 +28,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include "fastboot_driver_interface.h"
@@ -41,6 +42,7 @@
 #include "socket.h"
 #include "util.h"
 #include "ziparchive/zip_archive.h"
+#include "ziparchive/zip_writer.h"
 
 class FastBootTool {
   public:
@@ -193,3 +195,86 @@ bool is_logical(const std::string& partition);
 void fb_perform_format(const std::string& partition, int skip_if_not_supported,
                        const std::string& type_override, const std::string& size_override,
                        const unsigned fs_options, const FlashingPlan* fp);
+
+class FlashCapturer {
+  public:
+    FlashCapturer() = default;
+    void Run(FlashingPlan* flashing_plan, std::string& factory_path, std::string& out_path);
+
+    void SetPendingPartitionName(const std::string& part_name);
+    void AddPartition(const void* data, size_t len, size_t flags = ZipWriter::kCompress);
+    void AddSparsePartition(struct sparse_file *s, size_t flags = ZipWriter::kCompress);
+    void AddSplitSparsePartition(const std::string& name, std::vector<SparsePtr>& files, size_t flags = ZipWriter::kCompress);
+    void AddFile(const std::string& name, const void* data, size_t len, size_t flags = ZipWriter::kCompress);
+
+    void SetOutputZipOuterDirName(const std::string& name);
+    void StartOutputZipEntry(const std::string& name, size_t flags = ZipWriter::kCompress);
+    void FinishOutputZipEntry();
+
+    void AddCommand(const std::string& cmd);
+    void AddComment(const std::string& comment);
+
+    void AddShLine(const std::string& cmd);
+    void AddBatLine(const std::string& cmd);
+    void AddShBatLine(const std::string& cmd);
+    void AddShBatCommand(const std::string& cmd);
+
+    void AddShComment(const std::string& comment);
+    void AddBatComment(const std::string& comment);
+    void AddShBatComment(const std::string& comment);
+
+    void AddCheckVarCommand(const std::string& name, const std::string& expected_value);
+
+    const std::map<std::string, std::string> vars_ = {
+            {"current-slot", "a"},
+            {"has-slot:boot", "yes"},
+            {"has-slot:dtbo", "yes"},
+            {"has-slot:init_boot", "yes"},
+            {"has-slot:product", "yes"},
+            {"has-slot:pvmfw", "yes"},
+            {"has-slot:super", "no"},
+            {"has-slot:system", "yes"},
+            {"has-slot:system_dlkm", "yes"},
+            {"has-slot:system_ext", "yes"},
+            {"has-slot:vbmeta", "yes"},
+            {"has-slot:vbmeta_system", "yes"},
+            {"has-slot:vbmeta_vendor", "yes"},
+            {"has-slot:vendor", "yes"},
+            {"has-slot:vendor_boot", "yes"},
+            {"has-slot:vendor_dlkm", "yes"},
+            {"has-slot:vendor_kernel_boot", "yes"},
+            {"is-logical:boot_a", "no"},
+            {"is-logical:dtbo_a", "no"},
+            {"is-logical:init_boot_a", "no"},
+            {"is-logical:product_a", "yes"},
+            {"is-logical:pvmfw_a", "no"},
+            {"is-logical:super", "no"},
+            {"is-logical:system_a", "yes"},
+            {"is-logical:system_dlkm_a", "yes"},
+            {"is-logical:system_ext_a", "yes"},
+            {"is-logical:vbmeta_a", "no"},
+            {"is-logical:vbmeta_system_a", "no"},
+            {"is-logical:vbmeta_vendor_a", "no"},
+            {"is-logical:vendor_a", "yes"},
+            {"is-logical:vendor_boot_a", "no"},
+            {"is-logical:vendor_dlkm_a", "yes"},
+            {"is-logical:vendor_kernel_boot_a", "no"},
+            {"slot-count", "2"},
+            {"super-partition-name", "super"},
+    };
+
+  private:
+    void AddSparseFileInner(struct sparse_file *s, const std::string &name, size_t flags);
+
+    std::string* pending_file_name_{};
+    std::string script_;
+    std::string sh_script_;
+    std::string bat_script_;
+
+    FILE* output_zip_writer_file_{};
+    ZipWriter* output_zip_writer_{};
+    std::string output_zip_outer_dir_name_;
+};
+
+FlashCapturer* flash_capturer();
+bool has_flash_capturer();
