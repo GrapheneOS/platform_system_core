@@ -450,7 +450,7 @@ int FirstStageMain(int argc, char** argv) {
     boot_clock::time_point module_start_time = boot_clock::now();
     int module_count = 0;
     BootMode boot_mode = GetBootMode(cmdline, bootconfig);
-    bool disable_external_ports = boot_mode == BootMode::NORMAL_MODE;
+    bool disable_external_ports = boot_mode == BootMode::NORMAL_MODE && DISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT;
     if (!LoadKernelModules(boot_mode, want_console,
                            want_parallel, disable_external_ports, module_count)) {
         if (want_console != FirstStageConsoleParam::DISABLED) {

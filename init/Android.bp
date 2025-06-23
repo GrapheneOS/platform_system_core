@@ -105,6 +105,7 @@ libinit_cc_defaults {
         misc_undefined: ["signed-integer-overflow"],
     },
     cflags: [
+        "-DDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT=1",
         "-DALLOW_FIRST_STAGE_CONSOLE=0",
         "-DALLOW_LOCAL_PROP_OVERRIDE=0",
         "-DALLOW_PERMISSIVE_SELINUX=0",
@@ -125,6 +126,9 @@ libinit_cc_defaults {
     product_variables: {
         debuggable: {
             cppflags: [
+                "-UDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT",
+                // USB adb access is needed for debugging early boot failures
+                "-DDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT=0",
                 "-UALLOW_FIRST_STAGE_CONSOLE",
                 "-DALLOW_FIRST_STAGE_CONSOLE=1",
                 "-UALLOW_LOCAL_PROP_OVERRIDE",
@@ -406,6 +410,7 @@ init_first_stage_cc_defaults {
         "-Wextra",
         "-Wno-unused-parameter",
         "-Werror",
+        "-DDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT=1",
         "-DALLOW_FIRST_STAGE_CONSOLE=0",
         "-DALLOW_LOCAL_PROP_OVERRIDE=0",
         "-DALLOW_PERMISSIVE_SELINUX=0",
@@ -420,6 +425,10 @@ init_first_stage_cc_defaults {
     product_variables: {
         debuggable: {
             cflags: [
+                "-UDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT",
+                // USB adb access is needed for debugging early boot failures
+                "-DDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT=0",
+
                 "-UALLOW_FIRST_STAGE_CONSOLE",
                 "-DALLOW_FIRST_STAGE_CONSOLE=1",
 
