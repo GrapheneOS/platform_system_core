@@ -60,6 +60,7 @@ ModuleConfig ModuleConfig::Parse(const std::vector<std::string>& base_paths,
     if (external_port_state == ExternalPortState::DISABLED) {
         config.AddOption("tcpci_max77759", "disable_cc_toggling_by_default", "1");
         config.AddOption("pogo_transport", "charging_only_by_default", "1");
+        config.AddOption("google-role-sw", "disable_usb_data_by_default", "1");
     }
 
     return config;
