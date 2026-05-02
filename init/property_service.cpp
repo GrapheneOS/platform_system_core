@@ -79,6 +79,11 @@ static constexpr char APPCOMPAT_OVERRIDE_PROP_FOLDERNAME[] =
         "/dev/__properties__/appcompat_override";
 static constexpr char APPCOMPAT_OVERRIDE_PROP_TREE_FILE[] =
         "/dev/__properties__/appcompat_override/property_info";
+
+static constexpr char EXTENDED_OVERRIDE_PROP_FOLDERNAME[] =
+        "/dev/__properties__/extended_override";
+static constexpr char EXTENDED_OVERRIDE_PROP_TREE_FILE[] =
+        "/dev/__properties__/extended_override/property_info";
 using namespace std::literals;
 
 using android::base::ErrnoError;
@@ -1380,6 +1385,13 @@ void CreateSerializedPropertyInfo() {
         PLOG(ERROR) << "Unable to write appcompat override property infos to file";
     }
     selinux_android_restorecon(APPCOMPAT_OVERRIDE_PROP_TREE_FILE, 0);
+
+    mkdir(EXTENDED_OVERRIDE_PROP_FOLDERNAME, S_IRWXU | S_IXGRP | S_IXOTH);
+    if (!WriteStringToFile(serialized_contexts, EXTENDED_OVERRIDE_PROP_TREE_FILE, 0444, 0, 0,
+                           false)) {
+        PLOG(ERROR) << "Unable to write extended override property infos to file";
+    }
+    selinux_android_restorecon(EXTENDED_OVERRIDE_PROP_TREE_FILE, 0);
 }
 
 static void ExportKernelBootProps() {
