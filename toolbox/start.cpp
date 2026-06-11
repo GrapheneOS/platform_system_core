@@ -52,6 +52,11 @@ static void ControlDefaultServices(bool start) {
         services.emplace_back("zygote_secondary");
     }
 
+    if (!start) {
+        // compat zygote is started on-demand
+        services.emplace_back("zygote_compat");
+    }
+
     if (start) {
         for (const auto& service : services) {
             ControlService(true, service);

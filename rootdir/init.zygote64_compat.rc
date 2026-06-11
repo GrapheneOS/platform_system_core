@@ -1,0 +1,14 @@
+service zygote_compat /system/bin/app_process64 -Xzygote /system/bin --zygote --socket-name=zygote_compat
+    disable_hardened_malloc
+    class main
+    priority -20
+    user root
+    group root readproc reserved_disk
+    rlimit nofile 32768 262144
+    socket zygote_compat stream 660 root system
+    socket usap_pool_compat stream 660 root system
+    task_profiles ProcessCapacityHigh MaxPerformance
+    disabled
+
+on property:sys.start_compat_zygote=1
+    start zygote_compat
