@@ -70,6 +70,7 @@ class ServiceParser : public SectionParser {
     Result<void> ParseSharedKallsyms(std::vector<std::string>&& args);
     Result<void> ParseShutdown(std::vector<std::string>&& args);
     Result<void> ParseSigstop(std::vector<std::string>&& args);
+    Result<void> ParseDisableHardenedMalloc(std::vector<std::string>&& args);
     Result<void> ParseSocket(std::vector<std::string>&& args);
     Result<void> ParseStdioToKmsg(std::vector<std::string>&& args);
     Result<void> ParseTaskProfiles(std::vector<std::string>&& args);
