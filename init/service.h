@@ -233,6 +233,8 @@ class Service {
 
     bool sigstop_ = false;
 
+    bool disable_hardened_malloc_ = false;
+
     const std::chrono::seconds default_restart_period_ = 5s;
     std::chrono::seconds restart_period_ = default_restart_period_;
     std::optional<std::chrono::seconds> timeout_period_;

@@ -387,6 +387,11 @@ Result<void> ServiceParser::ParseSigstop(std::vector<std::string>&& args) {
     return {};
 }
 
+Result<void> ServiceParser::ParseDisableHardenedMalloc(std::vector<std::string>&& args) {
+    service_->disable_hardened_malloc_ = true;
+    return {};
+}
+
 Result<void> ServiceParser::ParseSetenv(std::vector<std::string>&& args) {
     service_->environment_vars_.emplace_back(std::move(args[1]), std::move(args[2]));
     return {};
@@ -612,6 +617,7 @@ const KeywordMap<ServiceParser::OptionParser>& ServiceParser::GetParserMap() con
         {"shared_kallsyms",         {0,     0,    &ServiceParser::ParseSharedKallsyms}},
         {"shutdown",                {1,     1,    &ServiceParser::ParseShutdown}},
         {"sigstop",                 {0,     0,    &ServiceParser::ParseSigstop}},
+        {"disable_hardened_malloc", {0,     0,    &ServiceParser::ParseDisableHardenedMalloc}},
         {"socket",                  {3,     6,    &ServiceParser::ParseSocket}},
         {"stdio_to_kmsg",           {0,     0,    &ServiceParser::ParseStdioToKmsg}},
         {"task_profiles",           {1,     kMax, &ServiceParser::ParseTaskProfiles}},

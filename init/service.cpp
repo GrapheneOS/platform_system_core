@@ -117,7 +117,8 @@ static Result<std::string> ComputeContextFromExecutable(const std::string& servi
     return computed_context;
 }
 
-static bool ExpandArgsAndExecv(const std::vector<std::string>& args, bool sigstop) {
+static bool ExpandArgsAndExecv(const std::vector<std::string>& args, bool sigstop,
+                               bool disable_hardened_malloc) {
     std::vector<std::string> expanded_args;
     std::vector<char*> c_strings;
 
@@ -135,6 +136,22 @@ static bool ExpandArgsAndExecv(const std::vector<std::string>& args, bool sigsto
 
     if (sigstop) {
         kill(getpid(), SIGSTOP);
+    }
+
+
+    if (disable_hardened_malloc) {
+#if defined(__BIONIC__)
+        if (setenv("DISABLE_HARDENED_MALLOC", "1", 1) != 0) {
+            LOG(ERROR) << "setenv(DISABLE_HARDENED_MALLOC) failed: " << strerror(errno);
+        }
+#if defined(__aarch64__)
+        const int FLAG_COMPAT_VA_39_BIT = 1 << 30;
+        execveat(-1, c_strings[0], c_strings.data(), environ, FLAG_COMPAT_VA_39_BIT);
+        LOG(ERROR) << "execveat with FLAG_COMPAT_VA_39_BIT failed for " << c_strings[0] << ": " << strerror(errno);
+#endif // defined(__aarch64__)
+#else
+        LOG(ERROR) << "ignored disable_hardened_malloc option in non-bionic environment";
+#endif // defined(__BIONIC__)
     }
 
 #if defined(__BIONIC__)
@@ -597,7 +614,7 @@ void Service::RunService(const std::vector<Descriptor>& descriptors,
     // priority. Aborts on failure.
     SetProcessAttributesAndCaps(std::move(setsid_finished));
 
-    if (!ExpandArgsAndExecv(args_, sigstop_)) {
+    if (!ExpandArgsAndExecv(args_, sigstop_, disable_hardened_malloc_)) {
         PLOG(ERROR) << "cannot execv('" << args_[0]
                     << "'). See the 'Debugging init' section of init's README.md for tips";
     }
