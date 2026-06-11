@@ -145,6 +145,13 @@ prebuilt_etc {
     name: "init.zygote64.rc",
     src: "init.zygote64.rc",
     sub_dir: "init/hw",
+    required: ["init.zygote64_compat.rc"],
+}
+
+prebuilt_etc {
+    name: "init.zygote64_compat.rc",
+    src: "init.zygote64_compat.rc",
+    sub_dir: "init/hw",
 }
 
 prebuilt_etc {
