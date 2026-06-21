@@ -510,10 +510,16 @@ Return SnapshotManager::CreateCowImage(LockedFile* lock, const std::string& name
         return Return::Error();
     }
 
+    if (device_->IsRecovery()) {
+        LOG(ERROR) << "Cannot create /data backed snapshots in recovery.";
+        return Return::NoSpace(status.cow_file_size());
+    }
+
     std::string cow_image_name = GetCowImageDeviceName(name);
     int cow_flags = IImageManager::CREATE_IMAGE_DEFAULT;
     return Return(images_->CreateBackingImage(cow_image_name, status.cow_file_size(), cow_flags));
 }
+
 static std::optional<std::string> GetUblkControlDevicePath(const std::string& ublkb_path) {
     if (!android::base::StartsWith(ublkb_path, "/dev/block/ublkb")) {
         return std::nullopt;
@@ -3906,8 +3912,6 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
     std::string vabc_disable_reason;
     if (!dap_metadata.vabc_enabled()) {
         vabc_disable_reason = "not enabled metadata";
-    } else if (device_->IsRecovery()) {
-        vabc_disable_reason = "recovery";
     } else if (!KernelSupportsCompressedSnapshots()) {
         vabc_disable_reason = "kernel missing userspace block device support";
     }
@@ -3946,7 +3950,8 @@ Return SnapshotManager::CreateUpdateSnapshots(const DeltaArchiveManifest& manife
 
     const bool using_snapuserd = userspace_snapshots || legacy_compression;
     if (!using_snapuserd) {
-        LOG(INFO) << "Using legacy Virtual A/B (dm-snapshot)";
+        LOG(ERROR) << "Using legacy Virtual A/B (dm-snapshot)";
+        return Return::Error();
     }
 
     std::string compression_algorithm;
