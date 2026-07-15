@@ -41,6 +41,7 @@ static void ControlDefaultServices(bool start) {
         "surfaceflinger",
         "audioserver",
         "zygote",
+        "zygote_compat",
     };
 #ifdef ANDROID_NATIVE_FRAMEWORK_PROTOTYPE
     services.emplace_back("zygote_next");
@@ -50,11 +51,6 @@ static void ControlDefaultServices(bool start) {
     std::string zygote_configuration = GetProperty("ro.zygote", "");
     if (zygote_configuration != "zygote32" && zygote_configuration != "zygote64") {
         services.emplace_back("zygote_secondary");
-    }
-
-    if (!start) {
-        // compat zygote is started on-demand
-        services.emplace_back("zygote_compat");
     }
 
     if (start) {
